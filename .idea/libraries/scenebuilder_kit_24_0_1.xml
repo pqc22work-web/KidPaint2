@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="scenebuilder-kit-24.0.1">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/scenebuilder/scenebuilder-kit-24.0.1.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
