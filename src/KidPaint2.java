@@ -21,6 +21,7 @@ public class KidPaint2 extends Application {
             }
             stage.setTitle(title + " - " + username);
 
+
             // 2. Show Host or Join dialog
             StudioDialog studioDialog = new StudioDialog(stage);
             String choice = studioDialog.showAndWait();
