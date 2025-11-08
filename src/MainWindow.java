@@ -35,6 +35,7 @@ public class MainWindow {
     final int MESSAGE = 2;
     final int FULL_SKETCH = 3;
     final int FULL_SKETCH_UPDATE = 4;
+    final int WHISPER_MESSAGE = 8;
     @FXML
     ChoiceBox<String> chbMode;
     Socket socket;
@@ -141,21 +142,41 @@ public class MainWindow {
     }
 
     void sendText(String text) {
+        text = text.trim();
+        if (text.isEmpty()) {
+            return;
+        }
+
         try {
-            out.write(MESSAGE);
-            System.out.println(MESSAGE);
+            if (text.startsWith("/w ")) {
+                // --- This is a Whisper command ---
+                // Format: /w username message
+                String[] parts = text.split(" ", 3);
 
-            out.writeInt(text.length());
-            System.out.println(text.length());
+                if (parts.length < 3) {
+                    // Not a valid whisper, show error locally
+                    areaMsg.appendText("*** Invalid whisper format. Use: /w <username> <message> ***\n");
+                    return;
+                }
 
-            out.write(text.getBytes());
-            System.out.println(text);
+                String targetUser = parts[1];
+                String whisperMsg = parts[2];
 
+                out.write(WHISPER_MESSAGE);
+                out.writeUTF(targetUser); // Send target username
+                out.writeUTF(whisperMsg); // Send the message
+
+            } else {
+                // This is a normal public message
+                out.write(MESSAGE);
+                out.writeInt(text.length());
+                out.write(text.getBytes());
+            }
             out.flush();
+
         } catch (IOException ex) {
             System.out.println("Oh! My connection is dropped!");
         }
-
     }
 
     void receiveData() {
