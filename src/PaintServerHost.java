@@ -225,8 +225,6 @@ public class PaintServerHost implements Runnable {
         }
     }
 
-
-
     void receivePixels(DataInputStream in) throws IOException {
         int color = in.readInt();
         int len = in.readInt();
