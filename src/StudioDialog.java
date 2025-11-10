@@ -49,7 +49,7 @@ public class StudioDialog {
 
     /**
      * Shows the dialog and waits for a user selection.
-     * @return "HOST" or "JOIN"
+     * @return "HOST", "JOIN", or "" (if closed)
      */
     public String showAndWait() {
         stage.showAndWait();

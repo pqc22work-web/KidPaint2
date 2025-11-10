@@ -108,7 +108,8 @@ public class StudioListDialog {
 
                     // Update UI on the JavaFX Application Thread
                     Platform.runLater(() -> {
-                        if (!studioList.stream().anyMatch(s -> s.getIpAddress().equals(ip))) {
+                        // Check if we already have this studio (by IP)
+                        if (!studioList.stream().anyMatch(s -> s.getIpAddress().equals(ip) && s.getPort() == port)) {
                             studioList.add(info);
                             lblStatus.setText("Found " + studioList.size() + " studio(s)");
                         }
@@ -120,7 +121,7 @@ public class StudioListDialog {
             System.out.println("Discovery finished.");
             Platform.runLater(() -> {
                 if (studioList.isEmpty()) {
-                    lblStatus.setText("No studios found.");
+                    lblStatus.setText("No studios found. Try again.");
                 } else {
                     lblStatus.setText("Select a studio to join.");
                 }

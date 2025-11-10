@@ -1,12 +1,13 @@
 import javafx.application.Application;
 import javafx.stage.Stage;
-import java.io.IOException; // ADD THIS IMPORT
+
+import java.io.IOException;
 
 public class KidPaint2 extends Application {
     final static String title = "KidPaint 2.0";
-    final static int SERVER_PORT = 12345;
+    final static int SERVER_PORT = 12345; // Default TCP port
 
-    PaintServerHost server;
+    PaintServerHost server; // Keep a reference to the server
 
     @Override
     public void start(Stage stage) throws Exception {
@@ -20,7 +21,6 @@ public class KidPaint2 extends Application {
                 return;
             }
             stage.setTitle(title + " - " + username);
-
 
             // 2. Show Host or Join dialog
             StudioDialog studioDialog = new StudioDialog(stage);
@@ -64,6 +64,9 @@ public class KidPaint2 extends Application {
         }
     }
 
+    /**
+     * Make sure we stop the server thread when the app closes.
+     */
     @Override
     public void stop() {
         if (server != null) {

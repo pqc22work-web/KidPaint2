@@ -1,13 +1,19 @@
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.LinkedList;
+import java.util.List;
+import java.util.Random;
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
  * This class runs as a server on a separate thread
@@ -17,7 +23,7 @@ public class PaintServerHost implements Runnable {
 
     // Store threads, not just streams
     HashMap<Socket, WorkerThread> clientThreads = new HashMap<>();
-    int [][] data = new int[100][100];
+    int[][] data = new int[100][100];
 
     // Message Type Constants
     final int NAME = 0;
@@ -29,17 +35,24 @@ public class PaintServerHost implements Runnable {
     final int FULL_USER_LIST = 6;
     final int USER_LEFT = 7;
     final int WHISPER_MESSAGE = 8;
+    final int GAME_INFO = 9; // Theme and Timer
+    final int GAME_OVER = 10; // Time's up
 
     private int port;
     private ServerSocket serverSocket;
     private String studioName;
     private Thread udpListenerThread;
+    private String currentTheme = "Waiting...";
+    private int timeRemaining = 300; // 5 minutes (in seconds)
+    private Timer gameTimer;
+    private boolean gameStarted = false;
 
     /**
      * Inner class Point
      */
-    class Point{
+    class Point {
         int x, y;
+
         public Point(int x, int y) {
             this.x = x;
             this.y = y;
@@ -58,6 +71,7 @@ public class PaintServerHost implements Runnable {
                 data[row][col] = 0; // 0 for black
             }
         }
+        loadThemesAndStartGame();
     }
 
     /**
@@ -74,7 +88,7 @@ public class PaintServerHost implements Runnable {
             serverSocket = new ServerSocket(port);
             System.out.println("TCP Server started on port: " + port);
 
-            while(true){
+            while (true) {
                 Socket socket = serverSocket.accept();
                 System.out.println("New client connected!");
 
@@ -95,6 +109,7 @@ public class PaintServerHost implements Runnable {
      * Stops the server by closing the ServerSocket and interrupting the UDP listener.
      */
     public void stopServer() {
+        if (gameTimer != null) gameTimer.cancel();
         if (udpListenerThread != null) {
             udpListenerThread.interrupt(); // Stop the UDP listener
         }
@@ -111,23 +126,18 @@ public class PaintServerHost implements Runnable {
 
     void serve(Socket socket, WorkerThread thread) throws IOException {
         DataInputStream in = new DataInputStream(socket.getInputStream());
-
-        // Get 'out' from the thread object
         DataOutputStream out = thread.getOutputStream();
 
-        while(true){
+        while (true) {
             int type = in.read();
-            switch(type){
+            switch (type) {
                 case NAME: //NAME
                     String newUsername = receiveName(in);
                     thread.setUsername(newUsername);
-
-                    // 1. Broadcast "User Joined" to everyone else
                     broadcastSystemMessage(USER_JOINED, newUsername);
-                    // 2. Send "Full User List" to the new client
                     sendFullUserList(out);
-                    // 3. Send the full sketch to the new client
                     sendFullSketch(out);
+                    sendGameInfo(out); // Send theme and time
                     break;
                 case PIXELS: //PIXELS
                     receivePixels(in);
@@ -139,22 +149,45 @@ public class PaintServerHost implements Runnable {
                     receiveWhisper(in, thread);
                     break;
                 case FULL_SKETCH_UPDATE:
-                    System.out.println("Receiving full sketch update from " + thread.getUsername());
                     receiveFullSketchUpdate(in);
                     break;
-
             }
         }
+    }
+
+    void loadThemesAndStartGame() {
+        try {
+            List<String> themes = Files.readAllLines(new File("themes.txt").toPath());
+            if (themes.isEmpty()) {
+                currentTheme = "No themes found!";
+            } else {
+                currentTheme = themes.get(new Random().nextInt(themes.size()));
+            }
+        } catch (IOException e) {
+            System.out.println("Could not load themes.txt: " + e.getMessage());
+            currentTheme = "Error!";
+        }
+        gameStarted = true;
+        gameTimer = new Timer();
+        gameTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                if (timeRemaining > 0) {
+                    timeRemaining--;
+                } else {
+                    broadcastSimpleGameMessage(GAME_OVER);
+                    System.out.println("Game Over!");
+                    cancel();
+                }
+            }
+        }, 1000, 1000);
     }
 
     void receiveMsg(DataInputStream in, String username) throws IOException {
         int size = in.readInt();
         byte[] buffer = new byte[size];
         in.read(buffer, 0, size);
-
-        System.out.println(new String(buffer, 0, size));
         String text = username + ": " + new String(buffer, 0, size);
-
         forwardMsg(text.getBytes());
     }
 
@@ -163,60 +196,66 @@ public class PaintServerHost implements Runnable {
             for (WorkerThread worker : clientThreads.values()) {
                 try {
                     DataOutputStream out = worker.getOutputStream();
-                    out.write(MESSAGE);   //Datatype 2 = message
+                    out.write(MESSAGE);
                     out.writeInt(buffer.length);
                     out.write(buffer, 0, buffer.length);
                     out.flush();
                 } catch (IOException ex) {
-                    System.out.println("This kid left!");
+                    // This kid left
                 }
             }
         }
     }
 
-    /**
-     * Receives a whisper, finds the target, and forwards.
-     */
+    void sendGameInfo(DataOutputStream out) throws IOException {
+        out.write(GAME_INFO);
+        out.writeUTF(currentTheme);
+        out.writeInt(timeRemaining);
+        out.flush();
+    }
+
+    void broadcastSimpleGameMessage(int type) {
+        synchronized (clientThreads) {
+            for (WorkerThread worker : clientThreads.values()) {
+                try {
+                    DataOutputStream out = worker.getOutputStream();
+                    out.write(type);
+                    out.flush();
+                } catch (IOException e) {
+                    // Failed to send
+                }
+            }
+        }
+    }
+
     void receiveWhisper(DataInputStream in, WorkerThread sender) throws IOException {
         String targetUsername = in.readUTF();
         String message = in.readUTF();
         String senderUsername = sender.getUsername();
-
         WorkerThread target = null;
-
-        // Find the target user
-        synchronized(clientThreads) {
-            for(WorkerThread worker : clientThreads.values()) {
+        synchronized (clientThreads) {
+            for (WorkerThread worker : clientThreads.values()) {
                 if (worker.getUsername().equals(targetUsername)) {
                     target = worker;
                     break;
                 }
             }
         }
-
         if (target != null) {
-            // Found the user, send them the message
             String toTargetMsg = "(Whisper from " + senderUsername + "): " + message;
             sendMessageToClient(target.getOutputStream(), toTargetMsg);
-
-            // Also send a copy back to the sender
             String toSenderMsg = "(Whisper to " + targetUsername + "): " + message;
             sendMessageToClient(sender.getOutputStream(), toSenderMsg);
-
         } else {
-            // User not found, send error back to sender
             String errorMsg = "*** User '" + targetUsername + "' not found. ***";
             sendMessageToClient(sender.getOutputStream(), errorMsg);
         }
     }
 
-    /**
-     * Helper method to send a formatted (Type 2) message to a single client.
-     */
-    void sendMessageToClient(DataOutputStream out, String message) throws IOException {
+    void sendMessageToClient(DataOutputStream out, String message) {
         byte[] buffer = message.getBytes();
         try {
-            out.write(MESSAGE); // Send as a normal message
+            out.write(MESSAGE);
             out.writeInt(buffer.length);
             out.write(buffer, 0, buffer.length);
             out.flush();
@@ -228,13 +267,10 @@ public class PaintServerHost implements Runnable {
     void receivePixels(DataInputStream in) throws IOException {
         int color = in.readInt();
         int len = in.readInt();
-
         LinkedList<Point> pixels = new LinkedList<>();
-
-        for (int i=0; i<len; i++){
+        for (int i = 0; i < len; i++) {
             int x = in.readInt();
             int y = in.readInt();
-
             pixels.add(new Point(x, y));
             data[y][x] = color;
         }
@@ -255,26 +291,25 @@ public class PaintServerHost implements Runnable {
                     }
                     out.flush();
                 } catch (IOException ex) {
-                    System.out.println("someone disconnected");
+                    // someone disconnected
                 }
             }
         }
     }
 
     String receiveName(DataInputStream in) throws IOException {
-        int len = in.readInt(); //read the length of username
-        byte[] buffer = new byte[len]; //create buffer
-        in.read(buffer,0,len); //read len bytes into buffer
-
-        System.out.println(new String(buffer,0,len)); //print the username
-        return new String(buffer, 0, len);
+        int len = in.readInt();
+        byte[] buffer = new byte[len];
+        in.read(buffer, 0, len);
+        String name = new String(buffer, 0, len);
+        System.out.println(name);
+        return name;
     }
 
     void sendFullSketch(DataOutputStream out) throws IOException {
         System.out.println("Sending full sketch to new client...");
         out.write(FULL_SKETCH);
-        out.writeInt(data.length); // Send dimension (100)
-
+        out.writeInt(data.length);
         for (int row = 0; row < data.length; row++) {
             for (int col = 0; col < data[0].length; col++) {
                 out.writeInt(data[row][col]);
@@ -286,32 +321,22 @@ public class PaintServerHost implements Runnable {
 
     void receiveFullSketchUpdate(DataInputStream in) throws IOException {
         int size = in.readInt();
-        if (size != data.length) {
-            System.out.println("Received sketch with incompatible size. Ignoring.");
-            return;
-        }
-
-        // Read the new sketch into the server's 'data' array
+        if (size != data.length) return;
         for (int row = 0; row < size; row++) {
             for (int col = 0; col < size; col++) {
                 data[row][col] = in.readInt();
             }
         }
-        System.out.println("Server data updated. Broadcasting to all clients.");
-
-        // Now, broadcast this new full sketch to everyone
         broadcastFullSketch();
     }
 
     void broadcastFullSketch() {
         synchronized (clientThreads) {
-            System.out.println("Broadcasting full sketch to " + clientThreads.size() + " clients.");
             for (WorkerThread worker : clientThreads.values()) {
                 try {
                     DataOutputStream out = worker.getOutputStream();
                     out.write(FULL_SKETCH_UPDATE);
-                    out.writeInt(data.length); // Send dimension (100)
-
+                    out.writeInt(data.length);
                     for (int row = 0; row < data.length; row++) {
                         for (int col = 0; col < data[0].length; col++) {
                             out.writeInt(data[row][col]);
@@ -319,50 +344,40 @@ public class PaintServerHost implements Runnable {
                     }
                     out.flush();
                 } catch (IOException ex) {
-                    System.out.println("Failed to broadcast sketch to a client.");
+                    // Failed to broadcast
                 }
             }
         }
-        System.out.println("Broadcast complete.");
     }
 
-    /**
-     * Sends the complete list of current users to a single client.
-     */
     void sendFullUserList(DataOutputStream out) throws IOException {
         System.out.println("Sending full user list...");
         out.write(FULL_USER_LIST);
-
-        synchronized(clientThreads) {
+        synchronized (clientThreads) {
             out.writeInt(clientThreads.size());
-            for(WorkerThread worker : clientThreads.values()) {
+            for (WorkerThread worker : clientThreads.values()) {
                 String name = worker.getUsername() != null ? worker.getUsername() : "Joining...";
-                out.writeUTF(name); // Use writeUTF for simplicity
+                out.writeUTF(name);
             }
         }
         out.flush();
         System.out.println("User list sent.");
     }
 
-    /**
-     * Broadcasts a system message (join/left) to all clients.
-     */
     void broadcastSystemMessage(int type, String message) {
         System.out.println("Broadcasting system message: " + type + " / " + message);
-        synchronized(clientThreads) {
-            for(WorkerThread worker : clientThreads.values()) {
-                // Don't send "User Joined" to the user who just joined
+        synchronized (clientThreads) {
+            for (WorkerThread worker : clientThreads.values()) {
                 if (type == USER_JOINED && worker.getUsername().equals(message)) {
                     continue;
                 }
-
                 try {
                     DataOutputStream out = worker.getOutputStream();
                     out.write(type);
-                    out.writeUTF(message); // Use writeUTF
+                    out.writeUTF(message);
                     out.flush();
                 } catch (IOException e) {
-                    System.out.println("Failed to send system message to a client.");
+                    // Failed to send
                 }
             }
         }
@@ -379,26 +394,17 @@ public class PaintServerHost implements Runnable {
 
         @Override
         public void run() {
-            // Try-with-resources to ensure socket is closed
             try (DatagramSocket socket = new DatagramSocket(DISCOVERY_PORT)) {
                 System.out.println("UDP Discovery listener started on port " + DISCOVERY_PORT);
-
                 while (!Thread.currentThread().isInterrupted()) {
                     byte[] receiveBuffer = new byte[1024];
                     DatagramPacket receivePacket = new DatagramPacket(receiveBuffer, receiveBuffer.length);
-                    socket.receive(receivePacket); // Block until a packet is received
-
+                    socket.receive(receivePacket);
                     String message = new String(receivePacket.getData(), 0, receivePacket.getLength());
-
-                    // If we get the correct request...
                     if (message.equals(DISCOVERY_REQUEST)) {
                         System.out.println("Received discovery request from " + receivePacket.getAddress());
-
-                        // ...reply with our studio name and TCP port
                         String reply = DISCOVERY_REPLY_HEADER + studioName + ":" + port;
                         byte[] sendData = reply.getBytes();
-
-                        // Send the reply back to where the request came from
                         DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length,
                                 receivePacket.getAddress(), receivePacket.getPort());
                         socket.send(sendPacket);

@@ -1,0 +1,8 @@
+House
+Tree
+Car
+Dog
+Cat
+Flower
+Boat
+Sun
